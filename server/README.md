@@ -75,7 +75,7 @@ The frontend portal (`index.html`) is equipped with an **Adaptive API Service La
 
 ## ▲ Deploying to Vercel
 
-The repository includes a Vercel configuration that routes the existing Express application through `api/index.js`. Import this repository in Vercel, then add these project environment variables in **Settings → Environment Variables**:
+The repository includes a Vercel configuration that routes the existing Express application through `api/index.js`. Set Vercel's **Root Directory** to the repository root (leave it blank or use `.`), **not** the `server` folder; the root configuration includes both the frontend assets and API function. Then add these project environment variables in **Settings → Environment Variables**:
 
 - `DATABASE_URL`: your MongoDB Atlas connection string, including a database name.
 - `JWT_SECRET`: a long, random secret. Do not reuse or commit a development value.

@@ -83,7 +83,7 @@ app.use((err, req, res, next) => {
 
 // Start Server
 if (process.env.NODE_ENV !== 'test') {
-  if (require.main === module) {
+  if (require.main === module && !process.env.VERCEL) {
     app.locals.databaseReady.then(() => {
       app.listen(PORT, () => {
         console.log(`================================================================`);
