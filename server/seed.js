@@ -1,7 +1,6 @@
-const { PrismaClient } = require('@prisma/client');
+require('dotenv').config();
 const bcrypt = require('bcryptjs');
-
-const prisma = new PrismaClient();
+const prisma = require('./db');
 
 const DEPARTMENTS = [
   { id: 1, code: 'CSE', name: 'Computer Science and Engineering (CSE)', banner_image: 'https://images.unsplash.com/photo-1517694712202-14dd9538aa97?w=1200&auto=format&fit=crop&q=80', description: 'Empowering students with advanced computing paradigms, software engineering, algorithmic design, and cutting-edge research.' },

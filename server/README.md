@@ -1,12 +1,12 @@
 # RIT Central Event Management Portal - Backend API Server
 
-This directory contains the production-grade **Node.js & Express REST API** with **Prisma ORM**, **JWT Authentication**, and **Multer File Uploads** for Rajarambapu Institute of Technology (RIT), Islampur.
+This directory contains the **Node.js & Express REST API** with **Prisma ORM**, **MongoDB Atlas**, **JWT Authentication**, and **Multer File Uploads** for Rajarambapu Institute of Technology (RIT), Islampur.
 
 ---
 
-## 🚀 Quick Start (Zero-Configuration with SQLite)
+## 🚀 Quick Start (MongoDB Atlas)
 
-The backend is configured to run out-of-the-box using **SQLite** for instant local testing, or **PostgreSQL** for enterprise deployment.
+Create a MongoDB Atlas cluster and database user, and allow your development machine/server IP in Atlas **Network Access**.
 
 ### 1. Install Dependencies
 ```bash
@@ -14,18 +14,30 @@ cd server
 npm install
 ```
 
-### 2. Generate Prisma Client & Run Migrations
-```bash
-npx prisma db push
+### 2. Configure the MongoDB connection
+
+Copy `.env.example` to `server/.env` and replace the `DATABASE_URL` placeholders with your Atlas connection string:
+
+```env
+DATABASE_URL="mongodb+srv://<database-user>:<url-encoded-password>@<cluster-host>/rit_central_event_portal?retryWrites=true&w=majority"
 ```
 
-### 3. Seed Initial College Data
+URL-encode special characters in the database user's password. Keep `.env` private and never commit Atlas credentials. Use a strong private `JWT_SECRET` for deployments.
+
+### 3. Generate Prisma Client & Sync the MongoDB schema
+```bash
+npm run prisma:generate
+npm run prisma:push
+```
+
+### 4. Seed Initial College Data
 Pre-populates all RIT departments (including First Year Engineering), Super Admin, CSE HOD, sample events (Hack-O-Fiesta, CodeDash, ORION 2026), registrations, and audit logs:
 ```bash
-node seed.js
+npm run seed
 ```
+**Warning:** seeding deletes existing portal collections before inserting demo data. Skip this step if the database already contains records you need to keep.
 
-### 4. Start the Server
+### 5. Start the Server
 ```bash
 # In development mode (auto-reload on code change)
 npm run dev
@@ -54,26 +66,22 @@ The frontend portal (`index.html`) is equipped with an **Adaptive API Service La
 
 ---
 
-## 🗄️ Switching to PostgreSQL or MySQL (Production)
+## 🗄️ MongoDB notes
 
-To connect to a real PostgreSQL database:
+- MongoDB ObjectIds are internal document keys. Existing numeric `id` fields remain in API responses for the frontend and routes.
+- The API connects to MongoDB before listening and reports connection/configuration errors during startup.
+- Backup restore uses MongoDB transactions, which require a replica set; Atlas clusters support this.
+- Changing databases does not import records from an old SQLite database; export/import existing data separately if needed.
 
-1. Open `server/.env` and update `DATABASE_URL`:
-   ```env
-   DATABASE_URL="postgresql://postgres:your_password@localhost:5432/rit_events_db?schema=public"
-   ```
-2. In `server/prisma/schema.prisma`, update the datasource provider:
-   ```prisma
-   datasource db {
-     provider = "postgresql"
-     url      = env("DATABASE_URL")
-   }
-   ```
-3. Push database schema and seed:
-   ```bash
-   npx prisma db push
-   node seed.js
-   ```
+## ▲ Deploying to Vercel
+
+The repository includes a Vercel configuration that routes the existing Express application through `api/index.js`. Import this repository in Vercel, then add these project environment variables in **Settings → Environment Variables**:
+
+- `DATABASE_URL`: your MongoDB Atlas connection string, including a database name.
+- `JWT_SECRET`: a long, random secret. Do not reuse or commit a development value.
+- `NODE_ENV`: `production`.
+
+In Atlas **Network Access**, allow the connections required by your deployment. Use a restricted database user with only the required database permissions. Vercel's filesystem is ephemeral, so uploaded files stored under `server/uploads` do not persist across deployments; configure Cloudinary (the existing optional storage integration) for persistent uploads.
 
 ---
 

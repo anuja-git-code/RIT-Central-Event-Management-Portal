@@ -3,12 +3,13 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite" // Change to "postgresql" or "mysql" for production deployment
+  provider = "mongodb"
   url      = env("DATABASE_URL")
 }
 
 model Department {
-  id           Int      @id @default(autoincrement())
+  mongo_id     String   @id @default(auto()) @map("_id") @db.ObjectId
+  id           Int      @unique
   code         String   @unique
   name         String
   banner_image String
@@ -20,7 +21,8 @@ model Department {
 }
 
 model User {
-  id            Int         @id @default(autoincrement())
+  mongo_id      String      @id @default(auto()) @map("_id") @db.ObjectId
+  id            Int         @unique
   username      String      @unique
   password      String      // Hashed password
   full_name     String
@@ -32,7 +34,8 @@ model User {
 }
 
 model Event {
-  id                    Int            @id @default(autoincrement())
+  mongo_id              String         @id @default(auto()) @map("_id") @db.ObjectId
+  id                    Int            @unique
   title                 String
   description           String
   department_id         Int
@@ -69,7 +72,8 @@ model Event {
 }
 
 model Registration {
-  id            Int      @id @default(autoincrement())
+  mongo_id      String   @id @default(auto()) @map("_id") @db.ObjectId
+  id            Int      @unique
   event_id      Int
   event         Event    @relation(fields: [event_id], references: [id], onDelete: Cascade)
   name          String
@@ -83,7 +87,8 @@ model Registration {
 }
 
 model AuditLog {
-  id         Int      @id @default(autoincrement())
+  mongo_id   String   @id @default(auto()) @map("_id") @db.ObjectId
+  id         Int      @unique
   timestamp  DateTime @default(now())
   user       String
   department String
@@ -94,7 +99,8 @@ model AuditLog {
 }
 
 model Notification {
-  id            Int      @id @default(autoincrement())
+  mongo_id      String   @id @default(auto()) @map("_id") @db.ObjectId
+  id            Int      @unique
   title         String
   message       String
   role_target   String?  // "all", "super_admin", "dept_admin", "public"
@@ -104,7 +110,8 @@ model Notification {
 }
 
 model VisitorStat {
-  id             Int      @id @default(autoincrement())
+  mongo_id       String   @id @default(auto()) @map("_id") @db.ObjectId
+  id             Int      @unique
   date           String   @unique // YYYY-MM-DD
   daily_visitors Int      @default(0)
   direct_traffic Int      @default(0)
@@ -112,4 +119,10 @@ model VisitorStat {
   social_media   Int      @default(0)
   google_search  Int      @default(0)
   qr_code_scans  Int      @default(0)
+}
+
+// Atomic numeric ID allocation keeps the existing API and seeded IDs unchanged.
+model Counter {
+  name  String @id @map("_id")
+  value Int
 }
