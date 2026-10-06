@@ -2,6 +2,7 @@
 node_modules/
 server/node_modules/
 server/generated/
+/public/
 
 # Environment variables
 .env

@@ -6,7 +6,7 @@
     "node": "22.x"
   },
   "scripts": {
-    "build": "prisma generate --schema=server/prisma/schema.prisma"
+    "build": "prisma generate --schema=server/prisma/schema.prisma && node scripts/prepare-vercel-public.js"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
