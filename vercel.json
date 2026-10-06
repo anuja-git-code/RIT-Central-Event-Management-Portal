@@ -1,7 +1,7 @@
 {
   "functions": {
     "api/[...path].js": {
-      "includeFiles": ["server/prisma/**", "server/generated/prisma/**"]
+      "includeFiles": "server/**"
     }
   }
 }
