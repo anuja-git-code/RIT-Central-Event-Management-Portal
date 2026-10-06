@@ -1,6 +1,12 @@
 require('dotenv').config();
-if (!process.env.DATABASE_URL && process.env.MONGODB_URI) {
-	process.env.DATABASE_URL = process.env.MONGODB_URI;
+const connectionString = process.env.DATABASE_URL || process.env.MONGODB_URI;
+if (connectionString) {
+	const databaseUrl = new URL(connectionString);
+	// Prisma's MongoDB connector needs a database name even when Atlas omits it from the URI.
+	if (!databaseUrl.pathname || databaseUrl.pathname === '/') {
+		databaseUrl.pathname = '/rit_central_event_portal';
+	}
+	process.env.DATABASE_URL = databaseUrl.toString();
 }
 const { PrismaClient } = require('./generated/prisma');
 
