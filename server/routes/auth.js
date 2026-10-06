@@ -7,6 +7,10 @@ const { JWT_SECRET, authenticateToken, requireSuperAdmin } = require('../middlew
 
 // POST /api/auth/login
 router.post('/login', async (req, res) => {
+  if (!JWT_SECRET) {
+    return res.status(503).json({ error: 'Authentication is unavailable until JWT_SECRET is configured.' });
+  }
+
   try {
     const { username, password } = req.body;
     if (!username || !password) {

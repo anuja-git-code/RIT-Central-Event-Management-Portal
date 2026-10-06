@@ -1,11 +1,12 @@
 const jwt = require('jsonwebtoken');
 
-const JWT_SECRET = process.env.JWT_SECRET || (process.env.VERCEL ? '' : 'local-development-secret');
-if (!JWT_SECRET) {
-  throw new Error('JWT_SECRET must be configured in the Vercel project environment.');
-}
+const JWT_SECRET = process.env.JWT_SECRET || (process.env.VERCEL ? null : 'local-development-secret');
 
 function authenticateToken(req, res, next) {
+  if (!JWT_SECRET) {
+    return res.status(503).json({ error: 'Authentication is unavailable until JWT_SECRET is configured.' });
+  }
+
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
 
