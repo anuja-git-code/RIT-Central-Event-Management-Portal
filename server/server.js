@@ -8,31 +8,31 @@ const prisma = require('./db');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-async function connectDatabase() {
-  await prisma.$connect();
-  await prisma.initializeSequences();
-  console.log('MongoDB connection established.');
-}
-
-if (process.env.NODE_ENV !== 'test') {
-  app.locals.databaseReady = connectDatabase();
-  app.locals.databaseReady.catch(error => {
-    console.error('Could not connect to MongoDB. Check DATABASE_URL and Atlas network access.', error);
-  });
-}
-
 // Middleware
 app.use(cors({ origin: '*' }));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use(morgan('dev'));
-app.use(async (req, res, next) => {
-  try {
-    if (app.locals.databaseReady) await app.locals.databaseReady;
-    next();
-  } catch (error) {
-    res.status(503).json({ error: 'Database connection is unavailable.' });
+
+let databaseInitialization;
+async function ensureDatabaseInitialized() {
+  if (!databaseInitialization) {
+    databaseInitialization = (async () => {
+      await prisma.$connect();
+      await prisma.initializeSequences();
+    })();
   }
+
+  try {
+    await databaseInitialization;
+  } catch (error) {
+    databaseInitialization = null;
+    throw error;
+  }
+}
+
+app.use('/api', (req, res, next) => {
+  ensureDatabaseInitialized().then(() => next()).catch(next);
 });
 
 // Static uploads folder
@@ -44,14 +44,25 @@ const parentAssetsPath = path.join(__dirname, '..', 'assets');
 app.use('/assets', express.static(parentAssetsPath));
 
 // Health check endpoint for Frontend Auto-Discovery
-app.get('/api/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    system: "K. E. Society's Rajarambapu Institute of Technology (RIT) Central Event Management Portal API",
-    version: '1.0.0',
-    mode: process.env.NODE_ENV || 'development',
-    timestamp: new Date().toISOString()
-  });
+app.get('/api/health', async (req, res) => {
+  try {
+    await prisma.$runCommandRaw({ ping: 1 });
+    res.json({
+      status: 'ok',
+      database: 'MongoDB',
+      system: "K. E. Society's Rajarambapu Institute of Technology (RIT) Central Event Management Portal API",
+      version: '1.0.0',
+      mode: process.env.NODE_ENV || 'development',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('MongoDB health check failed:', error);
+    res.status(503).json({
+      status: 'error',
+      database: 'disconnected',
+      error: 'MongoDB is unavailable.'
+    });
+  }
 });
 
 // Mount Routes
@@ -82,9 +93,10 @@ app.use((err, req, res, next) => {
 });
 
 // Start Server
-if (process.env.NODE_ENV !== 'test') {
-  if (require.main === module && !process.env.VERCEL) {
-    app.locals.databaseReady.then(() => {
+if (require.main === module && process.env.NODE_ENV !== 'test') {
+  async function startServer() {
+    try {
+      await ensureDatabaseInitialized();
       app.listen(PORT, () => {
         console.log(`================================================================`);
         console.log(`🚀 RIT Central Event Management Portal - Backend Server Running`);
@@ -92,8 +104,13 @@ if (process.env.NODE_ENV !== 'test') {
         console.log(`🏥 Health Check: http://localhost:${PORT}/api/health`);
         console.log(`================================================================`);
       });
-    }).catch(() => process.exit(1));
+    } catch (error) {
+      console.error('Could not connect to MongoDB. Check DATABASE_URL and Atlas network access.', error);
+      process.exit(1);
+    }
   }
+
+  startServer();
 }
 
 module.exports = app;

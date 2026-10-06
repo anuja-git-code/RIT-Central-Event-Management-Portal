@@ -1,7 +1,8 @@
 const express = require('express');
+const jwt = require('jsonwebtoken');
 const router = express.Router();
 const prisma = require('../db');
-const { authenticateToken, requireSuperAdmin, requireDeptAdminOrSuperAdmin } = require('../middleware/auth');
+const { JWT_SECRET, authenticateToken, requireSuperAdmin, requireDeptAdminOrSuperAdmin } = require('../middleware/auth');
 
 // GET /api/events - List events with powerful filtering & search
 router.get('/', async (req, res) => {
@@ -18,14 +19,28 @@ router.get('/', async (req, res) => {
       sort
     } = req.query;
 
-    const where = {};
-
-    // By default, if not explicitly querying status and unauthenticated, show Published events
-    if (status) {
-      where.status = status;
+    const token = req.headers.authorization && req.headers.authorization.split(' ')[1];
+    let viewer = null;
+    if (token) {
+      try {
+        viewer = jwt.verify(token, JWT_SECRET);
+      } catch (error) {
+        viewer = null;
+      }
     }
 
-    if (department_id) {
+    const where = {};
+
+    if (viewer && viewer.role === 'super_admin') {
+      if (status) where.status = status;
+    } else if (viewer && viewer.role === 'dept_admin') {
+      where.department_id = viewer.department_id;
+      if (status) where.status = status;
+    } else {
+      where.status = 'Published';
+    }
+
+    if (department_id && (!viewer || viewer.role === 'super_admin')) {
       where.department_id = parseInt(department_id);
     }
 
@@ -219,7 +234,7 @@ router.post('/', authenticateToken, requireDeptAdminOrSuperAdmin, async (req, re
         sponsors: sponsors ? (typeof sponsors === 'object' ? JSON.stringify(sponsors) : sponsors) : null,
         winners: winners ? (typeof winners === 'object' ? JSON.stringify(winners) : winners) : null,
         faqs: faqs ? (typeof faqs === 'object' ? JSON.stringify(faqs) : faqs) : null,
-        status: status || (req.user.role === 'super_admin' ? 'Published' : 'Pending Approval')
+        status: req.user.role === 'super_admin' ? (status || 'Published') : 'Pending Approval'
       },
       include: { department: true }
     });
@@ -323,7 +338,7 @@ router.put('/:id', authenticateToken, requireDeptAdminOrSuperAdmin, async (req, 
     if (sponsors !== undefined) dataToUpdate.sponsors = typeof sponsors === 'object' ? JSON.stringify(sponsors) : sponsors;
     if (winners !== undefined) dataToUpdate.winners = typeof winners === 'object' ? JSON.stringify(winners) : winners;
     if (faqs !== undefined) dataToUpdate.faqs = typeof faqs === 'object' ? JSON.stringify(faqs) : faqs;
-    if (status) dataToUpdate.status = status;
+    if (status && req.user.role === 'super_admin') dataToUpdate.status = status;
 
     const updated = await prisma.event.update({
       where: { id: eventId },

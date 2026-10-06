@@ -4,23 +4,24 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
-// Ensure uploads directory exists
 const uploadDir = path.join(__dirname, '..', 'uploads');
-if (!fs.existsSync(uploadDir)) {
+const isVercel = Boolean(process.env.VERCEL);
+if (!isVercel && !fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
 
-// Multer storage setup
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, uploadDir);
-  },
-  filename: function (req, file, cb) {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    const ext = path.extname(file.originalname);
-    cb(null, file.fieldname + '-' + uniqueSuffix + ext);
-  }
-});
+const storage = isVercel
+  ? multer.memoryStorage()
+  : multer.diskStorage({
+      destination: function (req, file, cb) {
+        cb(null, uploadDir);
+      },
+      filename: function (req, file, cb) {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        const ext = path.extname(file.originalname);
+        cb(null, file.fieldname + '-' + uniqueSuffix + ext);
+      }
+    });
 
 // File filter (images and documents)
 const fileFilter = (req, file, cb) => {
@@ -46,10 +47,12 @@ router.post('/', upload.single('file'), (req, res) => {
       return res.status(400).json({ error: 'No file uploaded.' });
     }
 
-    const fileUrl = `/uploads/${req.file.filename}`;
+    const fileUrl = isVercel
+      ? `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`
+      : `/uploads/${req.file.filename}`;
     res.status(201).json({
       message: 'File uploaded successfully.',
-      filename: req.file.filename,
+      filename: req.file.filename || req.file.originalname,
       originalName: req.file.originalname,
       size: req.file.size,
       url: fileUrl

@@ -487,8 +487,8 @@ function updateBackendStatus(isOnline) {
   if (pill && text) {
     if (isOnline) {
       pill.classList.remove('offline');
-      text.innerText = 'Live REST API';
-      pill.title = 'Connected to Node.js / Express Backend (http://localhost:5000)';
+      text.innerText = 'MongoDB Connected';
+      pill.title = 'Connected to the MongoDB-backed API';
     } else {
       pill.classList.add('offline');
       text.innerText = 'Standalone Mode';
@@ -498,21 +498,46 @@ function updateBackendStatus(isOnline) {
 }
 
 const apiService = {
-  baseUrl: 'http://localhost:5000/api',
+  baseUrl: window.RIT_API_BASE_URL || (
+    window.location.protocol === 'file:'
+      ? 'http://localhost:5000/api'
+      : window.location.hostname.endsWith('github.io')
+        ? 'https://rit-central-event-management-portal.vercel.app/api'
+        : '/api'
+  ),
+
+  async request(path, options = {}) {
+    const headers = new Headers(options.headers || {});
+    if (options.body && !(options.body instanceof FormData) && !headers.has('Content-Type')) {
+      headers.set('Content-Type', 'application/json');
+    }
+    if (appState.authToken) {
+      headers.set('Authorization', `Bearer ${appState.authToken}`);
+    }
+
+    const response = await fetch(`${this.baseUrl}${path}`, { ...options, headers });
+    const result = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(result && result.error ? result.error : `Request failed (${response.status}).`);
+    }
+    return result;
+  },
 
   async checkHealth() {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 3000);
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 1200);
       const res = await fetch(`${this.baseUrl}/health`, { signal: controller.signal });
-      clearTimeout(timeoutId);
       if (res.ok) {
         updateBackendStatus(true);
         await this.syncAllFromBackend();
+        if (appState.activeView === 'home') loadHomeView();
         return true;
       }
     } catch (e) {
       // offline
+    } finally {
+      clearTimeout(timeoutId);
     }
     updateBackendStatus(false);
     return false;
@@ -521,31 +546,24 @@ const apiService = {
   async syncAllFromBackend() {
     if (!appState.isApiConnected) return;
     try {
-      const [deptsRes, eventsRes, statsRes] = await Promise.all([
-        fetch(`${this.baseUrl}/departments`),
-        fetch(`${this.baseUrl}/events`),
-        fetch(`${this.baseUrl}/analytics/visitors`)
+      const [departmentsData, eventsData, visitorsData, notificationsData] = await Promise.all([
+        this.request('/departments'),
+        this.request('/events'),
+        this.request('/analytics/visitors'),
+        this.request('/notifications')
       ]);
-      if (deptsRes && deptsRes.ok) {
-        const d = await deptsRes.json();
-        if (d && d.length) {
-          departments = d;
-          syncLocalStorage('departments');
-        }
-      }
-      if (eventsRes && eventsRes.ok) {
-        const ev = await eventsRes.json();
-        if (ev && ev.length) {
-          events = ev;
-          syncLocalStorage('events');
-        }
-      }
-      if (statsRes && statsRes.ok) {
-        const vs = await statsRes.json();
-        if (vs && vs.daily) {
-          visitorStats = vs.daily;
-        }
-      }
+      departments = departmentsData;
+      events = eventsData;
+      visitorStats = visitorsData.daily || [];
+      notifications = notificationsData.map(notification => ({
+        ...notification,
+        unread: !notification.is_read,
+        time: new Date(notification.created_at).toLocaleString()
+      }));
+      syncLocalStorage('departments');
+      syncLocalStorage('events');
+      syncLocalStorage('notifications');
+      renderNotifications();
     } catch (e) {
       console.warn('Backend sync failed, using local cache:', e);
     }
@@ -2354,7 +2372,7 @@ function openRegistrationModal(event) {
 }
 
 // Handle Registration Submit Form
-document.getElementById('public-reg-form').onsubmit = (e) => {
+document.getElementById('public-reg-form').onsubmit = async (e) => {
   e.preventDefault();
   if (!activeRegisteringEvent) return;
 
@@ -2363,18 +2381,41 @@ document.getElementById('public-reg-form').onsubmit = (e) => {
   const studentDeptId = parseInt(document.getElementById('reg-form-dept').value);
   const txId = document.getElementById('reg-form-txid').value.trim();
 
-  // Create clean database record
-  const ticketId = `RIT-REG-${Math.floor(100000 + Math.random() * 900000)}`;
-  const newReg = {
-    id: registrations.length + 1,
-    event_id: activeRegisteringEvent.id,
-    name: nameVal,
-    email: emailVal,
-    department_id: studentDeptId,
-    ticket_id: ticketId,
-    paid: activeRegisteringEvent.fees.toLowerCase() === 'free' ? true : (txId !== ''),
-    checked_in: false
-  };
+  let newReg;
+  if (appState.isApiConnected) {
+    try {
+      const response = await apiService.request('/registrations', {
+        method: 'POST',
+        body: JSON.stringify({
+          event_id: activeRegisteringEvent.id,
+          name: nameVal,
+          email: emailVal,
+          department_id: studentDeptId,
+          tx_id: txId,
+          paid: activeRegisteringEvent.fees.toLowerCase() === 'free' || txId !== ''
+        })
+      });
+      newReg = {
+        ...response.registration,
+        ticket_id: response.registration.ticketId,
+        checked_in: false
+      };
+    } catch (error) {
+      showToast(`Registration was not saved: ${error.message}`);
+      return;
+    }
+  } else {
+    newReg = {
+      id: registrations.length + 1,
+      event_id: activeRegisteringEvent.id,
+      name: nameVal,
+      email: emailVal,
+      department_id: studentDeptId,
+      ticket_id: `RIT-REG-${Math.floor(100000 + Math.random() * 900000)}`,
+      paid: activeRegisteringEvent.fees.toLowerCase() === 'free' || txId !== '',
+      checked_in: false
+    };
+  }
 
   registrations.push(newReg);
   syncLocalStorage('registrations');
@@ -2445,7 +2486,7 @@ function launchTicketReceipt(reg, event) {
 
 // Certificate Search Flow
 let activeCertificateRecord = null;
-document.getElementById('certificate-form').onsubmit = (e) => {
+document.getElementById('certificate-form').onsubmit = async (e) => {
   e.preventDefault();
   const searchVal = document.getElementById('cert-ticket-id').value.trim().toUpperCase();
   const errorAlert = document.getElementById('cert-error');
@@ -2454,10 +2495,36 @@ document.getElementById('certificate-form').onsubmit = (e) => {
   errorAlert.classList.add('hidden');
   resultBox.classList.add('hidden');
 
-  // Search registrations list
-  const foundReg = registrations.find(r => r.ticket_id.toUpperCase() === searchVal || r.email.toUpperCase() === searchVal);
+  let foundReg;
+  let event;
+  if (appState.isApiConnected) {
+    try {
+      const verified = await apiService.request(`/registrations/verify/${encodeURIComponent(searchVal)}`);
+      foundReg = {
+        ticket_id: verified.ticketId,
+        name: verified.studentName,
+        email: verified.studentEmail,
+        checked_in: verified.checkedIn
+      };
+      event = {
+        title: verified.eventTitle,
+        category: verified.eventCategory,
+        academic_year: verified.academicYear,
+        event_date: verified.eventDate,
+        department_id: departments.find(department => department.code === verified.departmentCode)?.id,
+        department_name: verified.departmentName
+      };
+    } catch (error) {
+      errorAlert.innerText = error.message;
+      errorAlert.classList.remove('hidden');
+      return;
+    }
+  } else {
+    foundReg = registrations.find(r => r.ticket_id.toUpperCase() === searchVal || r.email.toUpperCase() === searchVal);
+    if (foundReg) event = events.find(evt => evt.id === foundReg.event_id);
+  }
+
   if (foundReg) {
-    const event = events.find(evt => evt.id === foundReg.event_id);
     if (!event) {
       errorAlert.innerText = "Target event record deleted.";
       errorAlert.classList.remove('hidden');
@@ -2896,12 +2963,24 @@ function renderRegistrationsTable() {
     tbody.appendChild(tr);
 
     // Bind check-in trigger
-    tr.querySelector('.attendance-check').onchange = (e) => {
+    tr.querySelector('.attendance-check').onchange = async (e) => {
       const idx = registrations.findIndex(r => r.id === reg.id);
       if (idx !== -1) {
-        registrations[idx].checked_in = e.target.checked;
+        const checkedIn = e.target.checked;
+        if (appState.isApiConnected) {
+          try {
+            await apiService.request(`/registrations/${reg.id}/checkin`, {
+              method: 'PATCH'
+            });
+          } catch (error) {
+            e.target.checked = reg.checked_in;
+            showToast(`Attendance was not saved: ${error.message}`);
+            return;
+          }
+        }
+        registrations[idx].checked_in = checkedIn;
         syncLocalStorage('registrations');
-        addAuditLog(`Participant Attendance Check-In`, `Checked: ${reg.checked_in}`, `Checked: ${e.target.checked} (Ticket: ${reg.ticket_id})`);
+        addAuditLog(`Participant Attendance Check-In`, `Checked: ${reg.checked_in}`, `Checked: ${checkedIn} (Ticket: ${reg.ticket_id})`);
         showToast(`Attendance checked: ${reg.name}`);
       }
     };
@@ -2972,7 +3051,7 @@ function openDeptModal(mode, dept = null) {
   modal.classList.remove('hidden');
 }
 
-document.getElementById('dept-form').onsubmit = (e) => {
+document.getElementById('dept-form').onsubmit = async (e) => {
   e.preventDefault();
   const codeVal = document.getElementById('dept-form-code').value.trim().toUpperCase();
   const nameVal = document.getElementById('dept-form-name').value.trim();
@@ -2980,10 +3059,26 @@ document.getElementById('dept-form').onsubmit = (e) => {
   const descVal = document.getElementById('dept-form-desc').value.trim();
 
   if (activeDeptEditId === null) {
-    // CRUD Create
-    const newId = departments.length > 0 ? Math.max(...departments.map(d => d.id)) + 1 : 1;
-    const newDept = { id: newId, name: nameVal, code: codeVal, banner_image: bannerVal, description: descVal };
-    departments.push(newDept);
+    const departmentData = {
+      code: codeVal,
+      name: nameVal,
+      banner_image: bannerVal,
+      description: descVal
+    };
+    if (appState.isApiConnected) {
+      try {
+        departments.push(await apiService.request('/departments', {
+          method: 'POST',
+          body: JSON.stringify(departmentData)
+        }));
+      } catch (error) {
+        showDashboardAlert('danger', `Department was not saved: ${error.message}`);
+        return;
+      }
+    } else {
+      const newId = departments.length > 0 ? Math.max(...departments.map(d => d.id)) + 1 : 1;
+      departments.push({ id: newId, ...departmentData });
+    }
     syncLocalStorage('departments');
     addAuditLog('Created Department', 'N/A', `${codeVal}: ${nameVal}`);
     showDashboardAlert('success', `Department '${codeVal}' added successfully!`);
@@ -2992,9 +3087,25 @@ document.getElementById('dept-form').onsubmit = (e) => {
     const idx = departments.findIndex(d => d.id === activeDeptEditId);
     if (idx !== -1) {
       const beforeStr = `${departments[idx].code}: ${departments[idx].name}`;
-      departments[idx].name = nameVal;
-      departments[idx].banner_image = bannerVal;
-      departments[idx].description = descVal;
+      const departmentData = {
+        code: codeVal,
+        name: nameVal,
+        banner_image: bannerVal,
+        description: descVal
+      };
+      if (appState.isApiConnected) {
+        try {
+          departments[idx] = await apiService.request(`/departments/${activeDeptEditId}`, {
+            method: 'PUT',
+            body: JSON.stringify(departmentData)
+          });
+        } catch (error) {
+          showDashboardAlert('danger', `Department was not updated: ${error.message}`);
+          return;
+        }
+      } else {
+        departments[idx] = { ...departments[idx], ...departmentData };
+      }
       syncLocalStorage('departments');
       addAuditLog('Updated Department', beforeStr, `${codeVal}: ${nameVal}`);
       showDashboardAlert('success', `Department details for '${codeVal}' updated!`);
@@ -3005,12 +3116,21 @@ document.getElementById('dept-form').onsubmit = (e) => {
   loadDepartmentsPane();
 };
 
-function deleteDepartment(id) {
+async function deleteDepartment(id) {
   const dept = departments.find(d => d.id === id);
   if (!dept) return;
 
   if (!window.confirm(`Are you sure you want to delete '${dept.name}'? This will archive all events linked to it.`)) {
     return;
+  }
+
+  if (appState.isApiConnected) {
+    try {
+      await apiService.request(`/departments/${id}`, { method: 'DELETE' });
+    } catch (error) {
+      showDashboardAlert('danger', `Department was not deleted: ${error.message}`);
+      return;
+    }
   }
 
   departments = departments.filter(d => d.id !== id);
@@ -3116,7 +3236,7 @@ function openAdminModal(mode, usr = null) {
   modal.classList.remove('hidden');
 }
 
-document.getElementById('admin-form').onsubmit = (e) => {
+document.getElementById('admin-form').onsubmit = async (e) => {
   e.preventDefault();
   const nameVal = document.getElementById('admin-form-name').value.trim();
   const userVal = document.getElementById('admin-form-user').value.trim();
@@ -3131,9 +3251,35 @@ document.getElementById('admin-form').onsubmit = (e) => {
       return;
     }
 
-    const newId = users.length > 0 ? Math.max(...users.map(u => u.id)) + 1 : 1;
-    const newUsr = { id: newId, username: userVal, password: passVal, department_id: deptIdVal, role: roleVal, full_name: nameVal };
-    users.push(newUsr);
+    const userData = {
+      username: userVal,
+      password: passVal,
+      department_id: deptIdVal,
+      role: roleVal,
+      full_name: nameVal
+    };
+    if (appState.isApiConnected) {
+      try {
+        const response = await apiService.request('/auth/register', {
+          method: 'POST',
+          body: JSON.stringify(userData)
+        });
+        users.push({
+          id: response.user.id,
+          username: response.user.username,
+          password: '',
+          department_id: response.user.departmentId,
+          role: response.user.role,
+          full_name: response.user.fullName
+        });
+      } catch (error) {
+        showDashboardAlert('danger', `Admin account was not saved: ${error.message}`);
+        return;
+      }
+    } else {
+      const newId = users.length > 0 ? Math.max(...users.map(u => u.id)) + 1 : 1;
+      users.push({ id: newId, ...userData });
+    }
     syncLocalStorage('users');
     addAuditLog('Created Coordinator Account', 'N/A', `${userVal} (${nameVal})`);
     showDashboardAlert('success', `Coordinator account for '${nameVal}' created successfully.`);
@@ -3141,10 +3287,32 @@ document.getElementById('admin-form').onsubmit = (e) => {
     const idx = users.findIndex(u => u.id === activeAdminEditId);
     if (idx !== -1) {
       const beforeStr = `${users[idx].full_name} (${users[idx].role})`;
-      users[idx].full_name = nameVal;
-      users[idx].password = passVal;
-      users[idx].role = roleVal;
-      users[idx].department_id = deptIdVal;
+      const userData = {
+        full_name: nameVal,
+        password: passVal,
+        role: roleVal,
+        department_id: deptIdVal
+      };
+      if (appState.isApiConnected) {
+        try {
+          await apiService.request(`/auth/users/${activeAdminEditId}`, {
+            method: 'PUT',
+            body: JSON.stringify(userData)
+          });
+          users[idx] = {
+            ...users[idx],
+            full_name: nameVal,
+            password: '',
+            role: roleVal,
+            department_id: deptIdVal
+          };
+        } catch (error) {
+          showDashboardAlert('danger', `Admin account was not updated: ${error.message}`);
+          return;
+        }
+      } else {
+        users[idx] = { ...users[idx], ...userData };
+      }
       syncLocalStorage('users');
       addAuditLog('Updated Coordinator Account', beforeStr, `${userVal} (${nameVal})`);
       showDashboardAlert('success', `Credentials for '${nameVal}' updated.`);
@@ -3155,7 +3323,7 @@ document.getElementById('admin-form').onsubmit = (e) => {
   loadAdminsPane();
 };
 
-function deleteAdmin(id) {
+async function deleteAdmin(id) {
   // Prevent deleting oneself
   if (appState.user && appState.user.id === id) {
     alert("Self deletion is prohibited for security compliance.");
@@ -3167,6 +3335,15 @@ function deleteAdmin(id) {
 
   if (!window.confirm(`Delete administrator credentials for '${usr.full_name}' permanently?`)) {
     return;
+  }
+
+  if (appState.isApiConnected) {
+    try {
+      await apiService.request(`/auth/users/${id}`, { method: 'DELETE' });
+    } catch (error) {
+      showDashboardAlert('danger', `Admin account was not deleted: ${error.message}`);
+      return;
+    }
   }
 
   users = users.filter(u => u.id !== id);
@@ -3654,14 +3831,14 @@ function setupFileUploadHandlers() {
       if (appState.isApiConnected) {
         const formData = new FormData();
         formData.append('file', file);
-        fetch('http://localhost:5000/api/upload', {
+        fetch(`${apiService.baseUrl}/upload`, {
           method: 'POST',
           body: formData
         })
         .then(res => res.json())
         .then(data => {
-          if (data && data.fileUrl) {
-            posterUrlInput.value = data.fileUrl;
+          if (data && data.url) {
+            posterUrlInput.value = data.url;
             showToast("Poster uploaded to server!");
           }
         })
@@ -3686,14 +3863,14 @@ function setupFileUploadHandlers() {
       if (appState.isApiConnected) {
         const formData = new FormData();
         formData.append('file', file);
-        fetch('http://localhost:5000/api/upload', {
+        fetch(`${apiService.baseUrl}/upload`, {
           method: 'POST',
           body: formData
         })
         .then(res => res.json())
         .then(data => {
-          if (data && data.fileUrl) {
-            qrUrlInput.value = data.fileUrl;
+          if (data && data.url) {
+            qrUrlInput.value = data.url;
             showToast("QR uploaded to server!");
           }
         })
@@ -3744,13 +3921,25 @@ window.markNotificationRead = function(id) {
     notif.unread = false;
     syncLocalStorage('notifications');
     renderNotifications();
+  if (appState.isApiConnected) {
+    apiService.request(`/notifications/${id}/read`, { method: 'PATCH' })
+      .catch(error => console.error('Failed to mark notification as read:', error));
   }
+}
 };
 
 function clearAllNotifications() {
   notifications.forEach(n => n.unread = false);
   syncLocalStorage('notifications');
   renderNotifications();
+  if (appState.isApiConnected) {
+    apiService.request('/notifications/read-all', {
+      method: 'POST',
+      body: JSON.stringify({
+        department_id: appState.user && appState.user.departmentId
+      })
+    }).catch(error => console.error('Failed to mark notifications as read:', error));
+  }
   showToast("All notifications marked as read.");
 }
 
@@ -3852,7 +4041,7 @@ function openEventModal(mode, event = null) {
   modal.classList.remove('hidden');
 }
 
-function handleEventFormSubmit(e) {
+async function handleEventFormSubmit(e) {
   e.preventDefault();
 
   const dateVal = document.getElementById('form-date').value;
@@ -3895,56 +4084,47 @@ function handleEventFormSubmit(e) {
   };
 
   if (activeModalMode === 'add') {
-    const newId = events.length > 0 ? Math.max(...events.map(item => item.id)) + 1 : 1;
-    eventData.id = newId;
     eventData.views = 0;
     eventData.downloads = 0;
-    
-    events.push(eventData);
-    syncLocalStorage('events');
-    addAuditLog('Created Event', 'N/A', `${eventData.title} (${eventData.status})`);
-    
-    // Add notification
-    const newNotif = {
-      id: Date.now(),
-      title: `New Event Added: ${eventData.title}`,
-      message: `Published for ${eventData.academic_year} (${eventData.category})`,
-      time: 'Just now',
-      unread: true
-    };
-    notifications.unshift(newNotif);
-    syncLocalStorage('notifications');
-    renderNotifications();
 
-    // Backend sync if active
     if (appState.isApiConnected) {
-      fetch('http://localhost:5000/api/events', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(eventData)
-      }).catch(err => console.log('Backend create failed:', err));
+      try {
+        const created = await apiService.request('/events', {
+          method: 'POST',
+          body: JSON.stringify(eventData)
+        });
+        events.push(created);
+      } catch (error) {
+        showDashboardAlert('danger', `Event was not saved: ${error.message}`);
+        return;
+      }
+    } else {
+      eventData.id = events.length > 0 ? Math.max(...events.map(item => item.id)) + 1 : 1;
+      events.push(eventData);
     }
 
+    syncLocalStorage('events');
+    addAuditLog('Created Event', 'N/A', `${eventData.title} (${eventData.status})`);
     showDashboardAlert('success', `New event '${eventData.title}' submitted! status: ${eventData.status}`);
   } else {
     const idx = events.findIndex(item => item.id === activeModalEventId);
     if (idx !== -1) {
       const beforeStr = `${events[idx].title} (${events[idx].status})`;
-      events[idx] = {
-        ...events[idx],
-        ...eventData
-      };
+      if (appState.isApiConnected) {
+        try {
+          events[idx] = await apiService.request(`/events/${activeModalEventId}`, {
+            method: 'PUT',
+            body: JSON.stringify(eventData)
+          });
+        } catch (error) {
+          showDashboardAlert('danger', `Event was not updated: ${error.message}`);
+          return;
+        }
+      } else {
+        events[idx] = { ...events[idx], ...eventData };
+      }
       syncLocalStorage('events');
       addAuditLog('Updated Event Details', beforeStr, `${eventData.title} (${eventData.status})`);
-
-      // Backend sync if active
-      if (appState.isApiConnected) {
-        fetch(`http://localhost:5000/api/events/${activeModalEventId}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(eventData)
-        }).catch(err => console.log('Backend update failed:', err));
-      }
 
       showDashboardAlert('success', `Event '${eventData.title}' configurations saved.`);
     }
@@ -3954,12 +4134,21 @@ function handleEventFormSubmit(e) {
   loadDashboardTable();
 }
 
-function deleteEvent(id) {
+async function deleteEvent(id) {
   const event = events.find(e => e.id === id);
   if (!event) return;
 
   if (!window.confirm(`Delete the event record for '${event.title}' permanently?`)) {
     return;
+  }
+
+  if (appState.isApiConnected) {
+    try {
+      await apiService.request(`/events/${id}`, { method: 'DELETE' });
+    } catch (error) {
+      showDashboardAlert('danger', `Event was not deleted: ${error.message}`);
+      return;
+    }
   }
 
   events = events.filter(item => item.id !== id);
@@ -3980,7 +4169,7 @@ function showDashboardAlert(type, text) {
 
 // --- 9. AUTHORIZATION ACCESS CONTROLS (LOGIN/LOGOUT) ---
 
-function handleLoginSubmit(e) {
+async function handleLoginSubmit(e) {
   e.preventDefault();
   const userVal = document.getElementById('username').value.trim();
   const passVal = document.getElementById('password').value.trim();
@@ -3988,31 +4177,79 @@ function handleLoginSubmit(e) {
 
   errorBox.classList.add('hidden');
 
-  const foundUser = users.find(u => u.username === userVal && u.password === passVal);
-  if (foundUser) {
-    const dept = departments.find(d => d.id === foundUser.department_id);
+  const isLocalStandalone = window.location.protocol === 'file:'
+    || ['localhost', '127.0.0.1'].includes(window.location.hostname);
+  if (!appState.isApiConnected && !isLocalStandalone) {
+    errorBox.innerText = 'The live database is unavailable. Sign-in and admin changes are disabled until the API reconnects.';
+    errorBox.classList.remove('hidden');
+    return;
+  }
 
-    // Pack session
-    appState.user = {
-      id: foundUser.id,
-      username: foundUser.username,
-      fullName: foundUser.full_name,
-      role: foundUser.role,
-      departmentId: foundUser.department_id,
-      departmentName: dept ? dept.name : null,
-      departmentCode: dept ? dept.code : null
-    };
+  let user;
+  if (appState.isApiConnected) {
+    try {
+      const result = await apiService.request('/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ username: userVal, password: passVal })
+      });
+      appState.authToken = result.token;
+      sessionStorage.setItem('rit_token', result.token);
+      user = result.user;
 
+      events = await apiService.request('/events');
+      syncLocalStorage('events');
+
+      if (user.role === 'super_admin') {
+        const remoteUsers = await apiService.request('/auth/users');
+        users = remoteUsers.map(remoteUser => ({
+          id: remoteUser.id,
+          username: remoteUser.username,
+          full_name: remoteUser.fullName,
+          role: remoteUser.role,
+          department_id: remoteUser.departmentId
+        }));
+        syncLocalStorage('users');
+      }
+
+      const visibleEvents = user.role === 'super_admin'
+        ? events
+        : events.filter(event => event.department_id === user.departmentId);
+      const registrationLists = await Promise.all(
+        visibleEvents.map(event => apiService.request(`/registrations/event/${event.id}`))
+      );
+      registrations = registrationLists.flat();
+      syncLocalStorage('registrations');
+    } catch (error) {
+      errorBox.innerText = error.message;
+      errorBox.classList.remove('hidden');
+      return;
+    }
+  } else {
+    const foundUser = users.find(u => u.username === userVal && u.password === passVal);
+    if (foundUser) {
+      const dept = departments.find(d => d.id === foundUser.department_id);
+      user = {
+        id: foundUser.id,
+        username: foundUser.username,
+        fullName: foundUser.full_name,
+        role: foundUser.role,
+        departmentId: foundUser.department_id,
+        departmentName: dept ? dept.name : null,
+        departmentCode: dept ? dept.code : null
+      };
+    }
+  }
+
+  if (user) {
+    appState.user = user;
     sessionStorage.setItem('rit_user', JSON.stringify(appState.user));
-    
-    // Toggle header menus
+
     document.getElementById('nav-dashboard').classList.remove('hidden');
     document.getElementById('nav-login').classList.add('hidden');
-
     addAuditLog('User Logged In');
     navigateTo('dashboard');
   } else {
-    errorBox.innerText = 'Invalid credential password combinations. Please review credentials checklist.';
+    errorBox.innerText = 'Invalid username or password.';
     errorBox.classList.remove('hidden');
   }
 }
@@ -4023,7 +4260,9 @@ function handleLogout() {
   }
   
   appState.user = null;
+  appState.authToken = null;
   sessionStorage.removeItem('rit_user');
+  sessionStorage.removeItem('rit_token');
 
   // Toggle header menus
   document.getElementById('nav-dashboard').classList.add('hidden');

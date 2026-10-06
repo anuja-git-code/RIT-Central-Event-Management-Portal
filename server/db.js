@@ -1,5 +1,8 @@
 require('dotenv').config();
-const { PrismaClient } = require('@prisma/client');
+if (!process.env.DATABASE_URL && process.env.MONGODB_URI) {
+	process.env.DATABASE_URL = process.env.MONGODB_URI;
+}
+const { PrismaClient } = require('./generated/prisma');
 
 const basePrisma = new PrismaClient();
 const numericIdModels = ['Department', 'User', 'Event', 'Registration', 'AuditLog', 'Notification', 'VisitorStat'];
@@ -13,6 +16,7 @@ async function reserveId(model) {
 		});
 		return counter.value;
 	} catch (error) {
+		// Two first-time inserts can race to create the same counter document.
 		if (error.code !== 'P2002') throw error;
 		const counter = await basePrisma.counter.update({
 			where: { name: model },
@@ -73,7 +77,9 @@ const prisma = basePrisma.$extends({
 			}
 		}
 	},
-	client: { initializeSequences }
+	client: {
+		initializeSequences
+	}
 });
 
 module.exports = prisma;

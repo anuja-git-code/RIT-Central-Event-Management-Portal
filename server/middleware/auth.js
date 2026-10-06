@@ -1,6 +1,9 @@
 const jwt = require('jsonwebtoken');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'rit_central_portal_jwt_secret_key_2026_secure';
+const JWT_SECRET = process.env.JWT_SECRET || (process.env.VERCEL ? '' : 'local-development-secret');
+if (!JWT_SECRET) {
+  throw new Error('JWT_SECRET must be configured in the Vercel project environment.');
+}
 
 function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];

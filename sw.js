@@ -1,4 +1,4 @@
-const CACHE_NAME = 'rit-event-portal-v8';
+const CACHE_NAME = 'rit-event-portal-v10';
 const ASSETS = [
   './',
   './index.html',
@@ -32,6 +32,7 @@ self.addEventListener('activate', event => {
 self.addEventListener('fetch', event => {
   // Only cache GET requests
   if (event.request.method !== 'GET') return;
+  if (new URL(event.request.url).pathname.startsWith('/api/')) return;
   
   event.respondWith(
     caches.match(event.request)

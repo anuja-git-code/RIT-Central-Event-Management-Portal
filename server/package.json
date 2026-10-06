@@ -21,16 +21,16 @@
   "author": "RIT Central Portal Team",
   "license": "ISC",
   "dependencies": {
-    "@prisma/client": "^6.4.1",
+    "@prisma/client": "^6.19.3",
     "bcryptjs": "^3.0.2",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.0",
-    "multer": "^1.4.5-lts.1"
+    "multer": "^2.0.2"
   },
   "devDependencies": {
-    "prisma": "^6.4.1"
+    "prisma": "^6.19.3"
   }
 }

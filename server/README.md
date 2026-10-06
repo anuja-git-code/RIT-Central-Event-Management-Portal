@@ -16,13 +16,13 @@ npm install
 
 ### 2. Configure the MongoDB connection
 
-Copy `.env.example` to `server/.env` and replace the `DATABASE_URL` placeholders with your Atlas connection string:
+Open the already-created `server/.env` file and replace the `DATABASE_URL` placeholders with the connection string from Atlas:
 
 ```env
 DATABASE_URL="mongodb+srv://<database-user>:<url-encoded-password>@<cluster-host>/rit_central_event_portal?retryWrites=true&w=majority"
 ```
 
-URL-encode special characters in the database user's password. Keep `.env` private and never commit Atlas credentials. Use a strong private `JWT_SECRET` for deployments.
+URL-encode special characters in the database user's password. Keep `.env` private and never commit Atlas credentials. Use a separate strong `JWT_SECRET` for deployments.
 
 ### 3. Generate Prisma Client & Sync the MongoDB schema
 ```bash
@@ -35,7 +35,7 @@ Pre-populates all RIT departments (including First Year Engineering), Super Admi
 ```bash
 npm run seed
 ```
-**Warning:** seeding deletes existing portal collections before inserting demo data. Skip this step if the database already contains records you need to keep.
+**Warning:** seeding deletes the existing portal collections before inserting demo data. Skip this step if you already have records you need to keep.
 
 ### 5. Start the Server
 ```bash
@@ -68,20 +68,10 @@ The frontend portal (`index.html`) is equipped with an **Adaptive API Service La
 
 ## 🗄️ MongoDB notes
 
-- MongoDB ObjectIds are internal document keys. Existing numeric `id` fields remain in API responses for the frontend and routes.
-- The API connects to MongoDB before listening and reports connection/configuration errors during startup.
-- Backup restore uses MongoDB transactions, which require a replica set; Atlas clusters support this.
-- Changing databases does not import records from an old SQLite database; export/import existing data separately if needed.
-
-## ▲ Deploying to Vercel
-
-The repository includes a Vercel configuration that routes the existing Express application through `api/index.js`. Set Vercel's **Root Directory** to the repository root (leave it blank or use `.`), **not** the `server` folder; the root configuration includes both the frontend assets and API function. Then add these project environment variables in **Settings → Environment Variables**:
-
-- `DATABASE_URL`: your MongoDB Atlas connection string, including a database name.
-- `JWT_SECRET`: a long, random secret. Do not reuse or commit a development value.
-- `NODE_ENV`: `production`.
-
-In Atlas **Network Access**, allow the connections required by your deployment. Use a restricted database user with only the required database permissions. Vercel's filesystem is ephemeral, so uploaded files stored under `server/uploads` do not persist across deployments; configure Cloudinary (the existing optional storage integration) for persistent uploads.
+- MongoDB ObjectIds are used as internal document keys. Existing numeric `id` fields remain in API responses and continue to be used by the frontend and routes.
+- The API connects to MongoDB before listening, so an invalid URI or Atlas network-access rule is reported at startup.
+- MongoDB transactions (used by the backup restore endpoint) require a replica set. MongoDB Atlas clusters provide this support.
+- Changing the database connection does not import records from an old SQLite database; export/import data separately if you need to retain them.
 
 ---
 
@@ -146,6 +136,22 @@ In Atlas **Network Access**, allow the connections required by your deployment. 
 ---
 
 ## 🐳 Deployment (Docker, PM2 & Nginx)
+
+### Deploying the portal and API to Vercel
+
+The repository root contains the static portal and a Vercel serverless adapter for the Express API. Set these environment variables in the Vercel project's **Settings → Environment Variables** before deploying:
+
+- `MONGODB_URI` or `DATABASE_URL`: the MongoDB Atlas connection string for the portal database. If both are set, `DATABASE_URL` takes precedence.
+- `JWT_SECRET`: a long, unique random secret. Generate it in your password manager; never paste it into source control or chat.
+- `NODE_ENV`: `production`.
+
+In MongoDB Atlas, allow network access from the Vercel deployment. Vercel serverless egress addresses may vary; use a supported static-egress/private-network option where available, or make an informed network-access change for a demo deployment. Use a dedicated database user with the minimum required privileges.
+
+After deployment, check `https://<your-domain>/api/health`. A healthy response reports `"status":"ok"` and `"database":"MongoDB"`. Open the portal on the same domain and confirm its status reads **MongoDB Connected**. Do not run the seed script against a database containing records you need to keep.
+
+GitHub Pages can host the static frontend, but it cannot run the API or safely connect directly to MongoDB. The frontend defaults to the Vercel API at `https://rit-central-event-management-portal.vercel.app/api` when served from `github.io`; both hosting URLs therefore use the same MongoDB data. Keep the API enabled only on the Vercel deployment and confirm its health check before testing admin changes.
+
+Uploaded files use local disk storage in `server/uploads` when self-hosted. On Vercel, uploads are held in memory and returned as data URLs so the portal can store them with the event document in MongoDB; keep demo uploads small because MongoDB documents have a 16 MB limit. For production-scale media, configure durable object storage.
 
 ### Running with PM2 (Production Daemon)
 ```bash
