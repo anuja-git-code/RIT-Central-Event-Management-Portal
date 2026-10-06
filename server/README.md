@@ -139,9 +139,9 @@ The frontend portal (`index.html`) is equipped with an **Adaptive API Service La
 
 ### Deploying the portal and API to Vercel
 
-The repository root contains the static portal and a Vercel serverless adapter for the Express API. Set these environment variables in the Vercel project's **Settings → Environment Variables** before deploying:
+The repository root contains the static portal and a `server.js` Express entry point that routes nested API paths through the Vercel deployment. Set these environment variables in the Vercel project's **Settings → Environment Variables** before deploying:
 
-- `MONGODB_URI` or `DATABASE_URL`: the MongoDB Atlas connection string for the portal database. If both are set, `DATABASE_URL` takes precedence.
+- `MONGODB_URI` or `DATABASE_URL`: the MongoDB Atlas connection string for the portal database. If both are set, `DATABASE_URL` takes precedence; if the URI omits its database path, the API uses `rit_central_event_portal`.
 - `JWT_SECRET`: a long, unique random secret. Generate it in your password manager; never paste it into source control or chat.
 - `NODE_ENV`: `production`.
 
